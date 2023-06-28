@@ -26,8 +26,7 @@ type IpLimit struct {
 }
 
 var IpLimitMap = &IpLimit{
-	IpMap:        make(map[string]map[string]time.Time),
-	MonitorQueue: make(chan [2]string, 100000),
+	IpMap: make(map[string]map[string]time.Time),
 }
 
 func ReplySuccess(ctx *gin.Context, r interface{}) {
@@ -72,21 +71,32 @@ func Transfer(ctx *gin.Context) {
 	IpLimitMap.MapLock.Lock()
 	AccountSlice, ok := IpLimitMap.IpMap[ctx.ClientIP()]
 	if ok {
-		if len(AccountSlice) == config.IpLimitAccountNum {
-			IpLimitMap.MapLock.Unlock()
-			result.Err = "Too many requests from this ip, please try again 24H later"
-			result.AsInBlock = false
-			ReplyFail(ctx, result)
-			return
+		if len(AccountSlice) >= config.IpLimitAccountNum {
+			var ResponseFail = true
+			for i, v := range AccountSlice {
+				if time.Now().Sub(v) > config.AccountExistTime {
+					delete(AccountSlice, i)
+					AccountSlice[query.Address] = time.Now()
+					ResponseFail = false
+					break
+				}
+			}
+			if ResponseFail {
+				IpLimitMap.MapLock.Unlock()
+				result.Err = "Too many requests from this ip, please try again 24H later"
+				result.AsInBlock = false
+				ReplyFail(ctx, result)
+				return
+			}
 		} else {
 			AccountSlice[query.Address] = time.Now()
 		}
 	} else {
-		IpLimitMap.IpMap[ctx.ClientIP()] = make(map[string]time.Time)
+		IpLimitMap.IpMap[ctx.ClientIP()] = make(map[string]time.Time, config.IpLimitAccountNum)
 		IpLimitMap.IpMap[ctx.ClientIP()][query.Address] = time.Now()
 	}
 	IpLimitMap.MapLock.Unlock()
-	IpLimitMap.MonitorQueue <- [2]string{ctx.ClientIP(), query.Address}
+
 	result.AsInBlock, err = trans.TradeOnChain(query.Address)
 	if err != nil {
 		result.Err = fmt.Sprintf("%s", err)

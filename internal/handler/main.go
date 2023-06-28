@@ -15,6 +15,5 @@ func Handler_main() {
 
 	//TODO:
 	r.POST("/transfer", Transfer)
-	go (*IpLimitMap).IpMonitor()
 	r.Run(":" + "9708")
 }

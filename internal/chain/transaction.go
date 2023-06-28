@@ -3,6 +3,7 @@ package chain
 import (
 	"cess-faucet/logger"
 	"fmt"
+	"github.com/CESSProject/cess-go-sdk/core/event"
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
@@ -34,10 +35,7 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 	api := getSubstrateApi_safe()
 	defer func() {
 		releaseSubstrateApi()
-		err := recover()
-		if err != nil {
-			logger.ErrLogger.Sugar().Errorf("[panic]: %v", err)
-		}
+		recover()
 	}()
 	keyring, err := signature.KeyringPairFromSecret(ci.IdentifyAccountPhrase, 0)
 	if err != nil {
@@ -52,7 +50,11 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c, err := types.NewCall(meta, ci.TransactionName, types.NewAccountID(addr))
+	AccountID, err := types.NewAccountID(addr)
+	if err != nil {
+		return false, err
+	}
+	c, err := types.NewCall(meta, ci.TransactionName, AccountID)
 	if err != nil {
 		return false, errors.Wrap(err, "NewCall err")
 	}
@@ -118,7 +120,7 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 		case status := <-sub.Chan():
 			if status.IsInBlock {
 				logger.InfoLogger.Sugar().Infof("[%v] tx blockhash: %#x", ci.TransactionName, status.AsInBlock)
-				events := MyEventRecords{}
+				events := event.EventRecords{}
 				h, err := api.RPC.State.GetStorageRaw(keye, status.AsInBlock)
 				if err != nil {
 					return false, err
@@ -128,10 +130,10 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 					fmt.Println("Analyze event err: ", err)
 				}
 
-				if len(events.Sminer_LessThan24Hours) == 0 {
+				if len(events.Sminer_DrawFaucetMoney) != 0 {
 					return true, nil
 				}
-				return false, nil
+				return false, errors.New("Please wait for 24 hours to claim!")
 			}
 		case <-timeout:
 			return false, errors.Errorf("[%v] tx timeout", ci.TransactionName)
