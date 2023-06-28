@@ -3,7 +3,6 @@ package chain
 import (
 	"cess-faucet/logger"
 	"fmt"
-	"github.com/CESSProject/cess-go-sdk/core/event"
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
@@ -120,7 +119,7 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 		case status := <-sub.Chan():
 			if status.IsInBlock {
 				logger.InfoLogger.Sugar().Infof("[%v] tx blockhash: %#x", ci.TransactionName, status.AsInBlock)
-				events := event.EventRecords{}
+				events := MyEventRecords{}
 				h, err := api.RPC.State.GetStorageRaw(keye, status.AsInBlock)
 				if err != nil {
 					return false, err
