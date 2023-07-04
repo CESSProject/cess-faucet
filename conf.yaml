@@ -1,4 +1,4 @@
 CoreData:
   Port: 9708
-  CessRpcAddr: ws://106.15.44.155:9948
+  CessRpcAddr: wss://testnet-rpc1.cess.cloud/ws/
   IdAccountPhraseOrSeed : unaware have galaxy cupboard brisk royal laundry lend quarter sugar divide dizzy
