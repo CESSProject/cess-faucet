@@ -19,9 +19,8 @@ const (
 
 var (
 	LogfilePathPrefix         = "./log/"
-	ChainModule               = "Sminer"
-	ChainTransaction_Register = "Sminer.faucet"
-	ChainModule_Sminer_Search = ""
+	ChainTransaction_Faucet   = "Sminer.faucet"
+	ChainTransaction_Transfer = "Balances.transfer"
 	IpLimitAccountNum         = 12
 	AccountExistTime          = 24 * 60 * 60 * time.Second
 )

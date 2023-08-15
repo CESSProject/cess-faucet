@@ -3,6 +3,8 @@ package chain
 import (
 	"cess-faucet/logger"
 	"fmt"
+	"github.com/CESSProject/cess-go-sdk/core/event"
+	"github.com/CESSProject/cess-go-sdk/core/utils"
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/signature"
 	"github.com/centrifuge/go-substrate-rpc-client/v4/types"
@@ -15,8 +17,6 @@ type CessInfo struct {
 	RpcAddr               string
 	IdentifyAccountPhrase string
 	TransactionName       string
-	ChainModule           string
-	ChainModuleMethod     string
 }
 
 var (
@@ -25,8 +25,7 @@ var (
 	SSPrefix        = []byte{0x53, 0x53, 0x35, 0x38, 0x50, 0x52, 0x45}
 )
 
-// etcd register
-func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
+func (ci *CessInfo) TradeOnChainByFaucetApi(addr *types.AccountID) (bool, error) {
 	var (
 		err         error
 		accountInfo types.AccountInfo
@@ -45,15 +44,7 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 	if err != nil {
 		return false, errors.Wrap(err, "GetMetadataLatest err")
 	}
-	addr, err := ParsingPublickey(Addr)
-	if err != nil {
-		return false, err
-	}
-	AccountID, err := types.NewAccountID(addr)
-	if err != nil {
-		return false, err
-	}
-	c, err := types.NewCall(meta, ci.TransactionName, AccountID)
+	c, err := types.NewCall(meta, ci.TransactionName, addr)
 	if err != nil {
 		return false, errors.Wrap(err, "NewCall err")
 	}
@@ -119,7 +110,7 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 		case status := <-sub.Chan():
 			if status.IsInBlock {
 				logger.InfoLogger.Sugar().Infof("[%v] tx blockhash: %#x", ci.TransactionName, status.AsInBlock)
-				events := MyEventRecords{}
+				events := event.EventRecords{}
 				h, err := api.RPC.State.GetStorageRaw(keye, status.AsInBlock)
 				if err != nil {
 					return false, err
@@ -133,6 +124,119 @@ func (ci *CessInfo) TradeOnChain(Addr string) (bool, error) {
 					return true, nil
 				}
 				return false, errors.New("Please wait for 24 hours to claim!")
+			}
+		case <-timeout:
+			return false, errors.Errorf("[%v] tx timeout", ci.TransactionName)
+		default:
+			time.Sleep(time.Second)
+		}
+	}
+}
+
+func (ci *CessInfo) TradeOnChainByDirectTransfer(addr types.MultiAddress, money types.UCompact) (bool, error) {
+	var (
+		err         error
+		accountInfo types.AccountInfo
+	)
+	api := getSubstrateApi_safe()
+	defer func() {
+		releaseSubstrateApi()
+		recover()
+	}()
+	keyring, err := signature.KeyringPairFromSecret(ci.IdentifyAccountPhrase, 0)
+	if err != nil {
+		return false, errors.Wrap(err, "KeyringPairFromSecret err")
+	}
+
+	meta, err := api.RPC.State.GetMetadataLatest()
+	if err != nil {
+		return false, errors.Wrap(err, "GetMetadataLatest err")
+	}
+	c, err := types.NewCall(meta, ci.TransactionName, addr, money)
+	if err != nil {
+		return false, errors.Wrap(err, "NewCall err")
+	}
+
+	ext := types.NewExtrinsic(c)
+	if err != nil {
+		return false, errors.Wrap(err, "NewExtrinsic err")
+	}
+
+	genesisHash, err := api.RPC.Chain.GetBlockHash(0)
+	if err != nil {
+		return false, errors.Wrap(err, "GetBlockHash err")
+	}
+
+	rv, err := api.RPC.State.GetRuntimeVersionLatest()
+	if err != nil {
+		return false, errors.Wrap(err, "GetRuntimeVersionLatest err")
+	}
+
+	key, err := types.CreateStorageKey(meta, "System", "Account", keyring.PublicKey)
+	if err != nil {
+		return false, errors.Wrap(err, "CreateStorageKey err")
+	}
+	keye, err := types.CreateStorageKey(meta, "System", "Events", nil)
+	if err != nil {
+		return false, errors.Wrap(err, "CreateStorageKey System Events err")
+	}
+
+	ok, err := api.RPC.State.GetStorageLatest(key, &accountInfo)
+	if err != nil {
+		return false, errors.Wrap(err, "GetStorageLatest err")
+	}
+	if !ok {
+		return false, errors.New("GetStorageLatest return value is empty")
+	}
+
+	o := types.SignatureOptions{
+		BlockHash:          genesisHash,
+		Era:                types.ExtrinsicEra{IsMortalEra: false},
+		GenesisHash:        genesisHash,
+		Nonce:              types.NewUCompactFromUInt(uint64(accountInfo.Nonce)),
+		SpecVersion:        rv.SpecVersion,
+		Tip:                types.NewUCompactFromUInt(0),
+		TransactionVersion: rv.TransactionVersion,
+	}
+
+	// Sign the transaction
+	err = ext.Sign(keyring, o)
+	if err != nil {
+		return false, errors.Wrap(err, "Sign err")
+	}
+
+	// Do the transfer and track the actual status
+	sub, err := api.RPC.Author.SubmitAndWatchExtrinsic(ext)
+	if err != nil {
+		return false, errors.Wrap(err, "SubmitAndWatchExtrinsic err")
+	}
+	defer sub.Unsubscribe()
+
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case status := <-sub.Chan():
+			if status.IsInBlock {
+				logger.InfoLogger.Sugar().Infof("[%v] tx blockhash: %#x", ci.TransactionName, status.AsInBlock)
+				events := event.EventRecords{}
+				h, err := api.RPC.State.GetStorageRaw(keye, status.AsInBlock)
+				if err != nil {
+					return false, err
+				}
+				err = types.EventRecordsRaw(*h).DecodeEventRecords(meta, &events)
+				if err != nil {
+					fmt.Println("Analyze event err: ", err)
+				}
+				if len(events.Balances_Transfer) > 0 {
+					for _, v := range events.Balances_Transfer {
+						if utils.CompareSlice(v.From[:], keyring.PublicKey) {
+							if utils.CompareSlice(v.To[:], addr.AsID[:]) {
+								return true, nil
+							}
+						}
+					}
+				}
+				return false, errors.New("Failed to token coins successfully")
 			}
 		case <-timeout:
 			return false, errors.Errorf("[%v] tx timeout", ci.TransactionName)
